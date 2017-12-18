@@ -1,0 +1,240 @@
+#!/usr/bin/env python
+# coding=utf-8
+# python 2.7.12
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+#from numpy import NaN
+from functools import reduce
+
+#定义变量
+Ntot = 2576 #Factot与Foward Return的行数
+T = 465     #周数
+labels = ['pro1', 'pro2', 'pro3', 'pro4', 'pro5']           #5个投资组合
+# build two dataframes for return(FR) and factor score(F)
+F = pd.read_csv("C:\DELL\quantitative research\BacktestLite\FACTOR.csv", sep=',', index_col=0)
+FR = pd.read_csv("C:\DELL\quantitative research\BacktestLite\FMRTN1W.csv", sep=',', index_col=0)
+
+# 将FR表中有空值的地方对应到F表中赋成空值
+F[FR.isnull()] = np.nan
+
+N = F.count()  # 存放股票活跃数的表
+Tn = len(F.columns)
+
+F1 = F.copy()  # 存放portfolio的表
+FR1 = FR.copy()
+for col in F1.columns:
+    F1[col] = pd.qcut(F[col], 5, labels=labels)              #算5分位数，找出5个投资组合pro
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 1 R_kt与r_kt
+r_kt = pd.DataFrame(index=labels, columns=F1.columns)  # 储存r k,t的dataframe（k=1,2,3,4,5)
+for label in labels:
+    df = FR[F1 == label]
+    r_kt.loc[label,:] = df.apply(lambda x: x.sum()/x.count()).T
+ser = r_kt.loc['pro5'] - r_kt.loc['pro1']            #储存r l-s,t的series
+ser.name = 'L-S'
+r_kt = r_kt.append(ser.T)                             #将r l-s,t并到r_kt中
+# 定义R_kt(年化收益率）计算公式
+def fR_kt(ser):
+    ser = ser + 1
+    R_kt = pow(reduce(lambda x, y: x * y, ser), 52.0 / Tn) - 1
+    return R_kt
+R_kt = r_kt.apply(fR_kt, axis=1)
+'''plt.title(r'Annualized Returns(%)')
+plt.ylabel('Annualized Return(%)')
+dict = {'Quantile1': R_kt['pro1']*100, 'Quantile2': R_kt['pro2']*100, 'Quantile3': R_kt['pro3']*100, 'Quantile4': R_kt['pro4']*100, 'Quantile5': R_kt['pro5']*100,
+        'L-S strategy': R_kt['L-S']*100}
+for i, key in enumerate(dict):
+    plt.bar(i, dict[key], color='b', width=0.8)
+plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+plt.yticks(dict.values())
+plt.grid(True)
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\Annualreturn.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 2 std
+r_std = r_kt.std(axis=1)
+r_std_annual = r_std * (52**0.5)
+'''Fig2 = r_std_annual.plot(kind='bar',color='b',alpha=0.7)
+plt.title(r'Annualized Volatility(%)')
+plt.ylabel('Annualized Volatility(%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\AnnualVolatility.png")
+plt.show(Fig2)'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 3 bar
+df_N = pd.DataFrame(F1.apply(lambda x: x.count()))             #显示活跃股票数
+df_N.rename(columns={0: 'N'}, inplace=True)
+Nt = df_N.copy()                                               #变为时间序列
+Nt.index = pd.to_datetime(pd.DatetimeIndex(df_N.index).date)  #Nt.index = pd.DatetimeIndex(df_N.index)
+ma1 = Nt['MA_' + str(52)] = pd.rolling_mean(Nt, 52)           #算12-月 滑动平均
+'''Nt.plot()
+plt.title(r'Coverage of Portfolios')
+plt.ylabel('# of stocks')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\Coverage.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 4 换手率
+turnover = pd.DataFrame(index=[0], columns=F1.columns)
+cols = list(F.columns) #可以删除
+
+def num_turnover(col1, col2, pro):                           #定义换手率计算函数
+    set1 = set(F1.ix[F1[col1] == pro,col1].index)
+    set2 = set(F1.ix[F1[col2] == pro,col2].index)
+    return len(set1^set2)
+
+for col1,col2 in zip(cols[:-1], cols[1:]):                  #对Pro1和pro5每一列（即每一周）计算换手率
+    K = num_turnover(col1,col2,'pro1')
+    L = num_turnover(col1,col2,'pro5')
+    turnover.ix[0, col2] = (K+L)/(df_N.loc[col1, 'N']/5.0)
+del cols
+turnover1 = turnover.T                                      #生成换手率的时间序列
+turnovert = turnover1.copy()
+
+turnovert.index = pd.to_datetime(pd.DatetimeIndex(turnover1.index).date)
+ma2 = turnovert['MA_' + str(52)] = pd.rolling_mean(turnovert, 52)     #算12-月滑动平均
+'''turnovert.plot()
+plt.title(r'Factor Turnover(%)')
+plt.ylabel('Turnover(%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\FactorTurnover.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 5 IR
+# 读取大盘指数作为benchmark（选取沪深300）
+r_ktb = pd.read_csv("C:\DELL\quantitative research\BacktestLite\Rebecca\eenchmark.csv", sep=',', index_col=0)
+r_kt = r_kt.T                                   #将r_kt转置为6列465行
+r_ktb.index = r_kt.index
+ER_pb = pd.Series(index=labels)                 #定义每个pro的期望series
+UR_pb = pd.Series(index=labels)                 #定义每个pro的标准差series
+IR_pb = pd.Series(index=labels)                 #定义每个pro的IR series
+r_pb = pd.DataFrame(index=r_kt.index, columns=labels)                         #定义Rp - Rb 存放的dataframe
+
+for label in labels:
+    for col in r_kt.index:
+        r_pb.loc[col,label]=r_kt.loc[col,label]-r_ktb.loc[col,'Return']     #r_ktb的列名为‘Return’
+    ER_pb[label] = r_pb[label].mean()
+    UR_pb[label] = r_pb[label].std()
+    IR_pb[label] = ER_pb[label]/UR_pb[label]
+ER_ls = ser.mean()                               #l-s 的期望
+UR_ls = ser.std()                                #l-s的标准差  【其Rb=0,故可直接用ser（存放r ls,t的series)】
+IR_ls = ER_ls/UR_ls                              #l-s的IR
+'''plt.title(r'Information Ratio')
+plt.ylabel('Information Ratio')
+dict = {'Quantile1': IR_pb['pro1'], 'Quantile2': IR_pb['pro2'], 'Quantile3': IR_pb['pro3'], 'Quantile4': IR_pb['pro4'], 'Quantile5': IR_pb['pro5'],
+        'L-S strategy': IR_ls}
+for i, key in enumerate(dict):
+    plt.bar(i, dict[key], color='b', width=0.8)
+plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+plt.yticks(dict.values())
+plt.grid(True)
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\IR.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 6 Portfolio Returns
+r_kt = r_kt.T                                    #将r_kt还原为6行465列
+#Prin 为存放本金的dataframe
+Prin = pd.DataFrame(index=['pro1', 'pro2', 'pro3', 'pro4', 'pro5','L-S'], columns=FR.columns)
+coll = FR.columns
+
+"""
+for label in Prin.index:
+    Prin.loc[label, coll[0]]=1
+    for t in range(0,T-1):
+        Prin.loc[label,coll[t+1]] = Prin.loc[label,coll[t]]*(r_kt.loc[label,coll[t]]+1)
+"""
+Prin[coll[0]] = 1 
+for t in range(0,T-1):
+    Prin[coll[t+1]] = Prin[coll[t]]*(r_kt[coll[t]]+1)
+Prin = Prin.T                                    #转置为465行，6列
+Prin.to_csv('C:\DELL\quantitative research\BacktestLite\Rebecca\PortfolioReturn.csv')
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 7 Quantile Returns
+Print=Prin.copy()                                #构造一个时间序列
+Print.index = pd.to_datetime(pd.DatetimeIndex(Prin.index).date)
+Print.index.freq = 'W'
+#Print.index = pd.DatetimeIndex(Prin.index,freq='W')
+Printres = Print.resample('4W', how='sum')      #将其用重采样方式算出4周cumulative return
+'''Printres.plot()
+plt.title(r'Quantile Returns(%)')
+plt.ylabel('Cumulative Return(%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\QuantilePortfolio.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 8 Serial Correlation
+Fs=(F.T).copy()                                 #将Factor表转置并复制一份， 【465rows, 2557columns】
+Fs.index = pd.to_datetime(pd.DatetimeIndex((F.T).index).date)    #将索引换为datetime
+Fs.index.freq = 'W'                            #设定索引的频率
+Fsres = Fs.resample('4W', how='mean')         #用重采样算出月平均Factor score
+F3 = (Fsres.T).iloc[:,:-1]                     #从第一行取到倒数第二行  此时为转置表     【2557rows, 465columns】
+F4 = (Fsres.T).iloc[:,1:]                      #从第二行取到最后一行   此时为转置表     【2557rows, 465columns】
+F3.columns = F4.columns                        #将二者列名变为同样，方便后续corrwith
+correlc = F3.corrwith(F4)                      #即可完成F原表中每一列与下一列间的因子分析
+ma3 = pd.rolling_mean(correlc,12)              #求12-月 滑动平均
+'''correl1t=pd.DataFrame([correlc,ma3])
+(correl1t.T).plot()
+plt.title(r'Serial Correlation(%)')
+plt.ylabel('Serial Corr(%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\SerialCorrelation.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 9 SR
+DR = pd.Series(index=labels)                  #构造存DR的series
+SR = pd.Series(index=labels)                   #构造存SR的series
+r_pb1 = r_pb.copy()                           #将r_pb（即Rp-Rb)复制一份
+r_pb1[r_pb >= 0]=0                            #将所有大于0的值都赋为0
+def likevar(ser):
+    b = (ser**2).sum()/len(ser)
+    return b**0.5
+DR = r_pb1.apply(likevar,axis=0)              #即实现了DR计算公式
+SR = ER_pb/DR                                 #算出SR
+ser1 = ser.copy()                             #将r ls,t copy一份（ls的r_pb就是r ls,t)
+ser1[ser>=0]=0
+DR_ls = likevar(ser1)
+SR_ls = ER_ls/DR_ls
+'''plt.title(r'Sortino Ratio')
+plt.ylabel('Sortino Ratio')
+dict = {'Quantile1': SR['pro1'], 'Quantile2': SR['pro2'], 'Quantile3': SR['pro3'], 'Quantile4': SR['pro4'], 'Quantile5': SR['pro5'],
+        'L-S strategy': SR_ls}
+for i, key in enumerate(dict):
+    plt.bar(i, dict[key], color='b', width=0.8)
+plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+plt.yticks(dict.values())
+plt.grid(True)
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\SR.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 10 Spearson Rank IC
+Frank = F.rank(ascending=False,method='average')            #F的rank 降序
+FRrank = FR.rank(ascending=False,method='average')          #FR的rank 降序
+correls = Frank.corrwith(FRrank)                             #算二者排名的相关性
+correlst = correls.copy()                                    #将其换成时间序列
+correlst.index = pd.DatetimeIndex(correls.index).date
+ma4 = pd.rolling_mean(correlst, 52)                         #算12-月滑动平均
+'''correl2t=pd.DataFrame([correlst,ma4])
+(correl2t.T).plot()
+plt.title(r'Spearman IC(%)')
+plt.ylabel('Spearman IC(%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\Spearman_IC.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 11 r ls,t的时间序列
+sert = ser.copy()                                             #将r ls,t的series ‘ser’换为时间序列
+sert.index = pd.DatetimeIndex(ser.index).date
+ma5 = pd.rolling_mean(sert, 52)                               #算12-月 滑动平均
+'''ser1t=pd.DataFrame([sert,ma5])
+(ser1t.T).plot()
+plt.title(r'Time Series Spread(%)')
+plt.ylabel('Spread%)')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\Timeseries_Spread.png")'''
+
+# ----------------------------------------------------------------------------------------------------------------------
+# 12 Wealth curve
+plt.figure()                                                   #新建一个figure（否则会报错）
+wc = Prin['L-S']                                              #wealth curve就是前面cumulative return表中的L-S列
+wc.index = pd.to_datetime(pd.DatetimeIndex(Prin.index).date)  #换成时间序列
+'''wc.plot()
+plt.title(r'Wealth Curve')
+plt.ylabel('L-S Return')
+plt.savefig("C:\DELL\quantitative research\BacktestLite\Rebecca\Wealth_Curve.png")'''
