@@ -1,0 +1,312 @@
+#!/usr/bin/env python
+# coding=utf-8
+# python 2.7.12
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from numpy import NaN
+from functools import reduce
+
+class backtest():
+    F = 0
+    FR = 0
+    r_ktb = 0
+    num = 0
+    def __init__(self, F, FR, r_ktb,num):
+        self.F = F
+        self.FR = FR
+        self.r_ktb = r_ktb
+        self.num = num
+
+    def initialize(self):
+        self.Ntot = len(self.F)  # Factot与Foward Return的行数
+        self.T = len((self.F).T)  # 天数
+        self.F[(self.FR).isnull()] = np.nan
+        self.F.columns = pd.to_datetime(pd.DatetimeIndex(self.F.columns).date)
+        self.FR.columns = pd.to_datetime(pd.DatetimeIndex(self.FR.columns).date)
+        self.N = self.F.count()
+        self.F[self.F==np.inf]=np.nan
+        self.FR[self.F==np.inf]=np.nan
+        self.F1 = self.F.copy()
+        self.F2 = self.F.rank(method = 'first',ascending=True,axis=0)  # 存放portfolio的表
+        self.FR1 = self.FR.copy()
+        self.labels = ['pro1', 'pro2', 'pro3', 'pro4', 'pro5']
+        self.roll_period = 52.0/self.num
+        print "Initialize done!"
+
+    def annual_return(self,FACname, ARGname):
+        self.r_kt = pd.DataFrame(index=self.labels, columns=self.F1.columns)
+        for col in self.F1.columns:
+            self.F1[col] = pd.qcut((self.F2[col]).dropna(), 5, labels=self.labels)
+        for label in self.labels:
+            df = self.FR[self.F1 == label]
+            self.r_kt.loc[label, :] = df.apply(lambda x: x.sum() / x.count()).T
+        self.ser = (self.r_kt.loc['pro5'] - self.r_kt.loc['pro1'])/2  # 储存r l-s,t的series
+        self.ser.name = 'L-S'
+        self.r_kt = self.r_kt.append(self.ser.T)  # 将r l-s,t并到r_kt中
+        print self.r_kt
+        ser_prod = (self.r_kt+1).prod(axis=1)
+        self.R_kt = (ser_prod**(self.roll_period/self.T))-1
+        #self.R_kt = self.r_kt.apply((lambda x: (x+1).prod()**(self.roll_period/self.T) - 1),axis=1)
+        plt.figure()
+        plt.title(r'Annualized Returns(%)')
+        plt.ylabel('Annualized Return(%)')
+        dict = {'Quantile1': self.R_kt['pro1'] * 100, 'Quantile2': self.R_kt['pro2'] * 100, 'Quantile3': self.R_kt['pro3'] * 100,
+                'Quantile4': self.R_kt['pro4'] * 100, 'Quantile5': self.R_kt['pro5'] * 100,
+                'L-S strategy': self.R_kt['L-S'] * 100}
+        for i, key in enumerate(dict):
+            plt.bar(i, dict[key], color='b', width=0.8)
+        plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+        plt.yticks(dict.values())
+        plt.grid(True)
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\Annualreturn.png")
+        plt.close()
+        print "Annual return is done!"
+
+    def r_annual_std(self, FACname, ARGname):
+        self.r_std = self.r_kt.std(axis=1)
+        self.r_std_annual = self.r_std * (self.roll_period ** 0.5)
+        plt.figure()
+        self.r_std_annual.plot(kind='bar', color='b', alpha=0.7)
+        plt.title(r'Annualized Volatility(%)')
+        plt.ylabel('Annualized Volatility(%)')
+        plt.savefig(
+                "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\AnnualVolatility.png")
+        plt.close()
+        print "Annual std is done!"
+
+    def Ntbar(self, FACname, ARGname):
+        self.N.rename(columns={0: 'N'}, inplace=True)
+        ma1 = pd.rolling_mean(self.N,12)  # 算12-月 滑动平均
+        cum = pd.DataFrame([self.N,ma1])
+        plt.figure()
+        (cum.T).plot()
+        plt.title(r'Coverage of Portfolios')
+        plt.ylabel('# of stocks')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\Coverage.png")
+        plt.close()
+        print "Bar of active stocks is done!"
+
+    def turnover_fig(self, FACname, ARGname):
+        turnover = pd.DataFrame(index=['turnover'], columns=self.F1.columns)
+        cols = list(self.F.columns)
+        df_N = pd.DataFrame(self.F1.apply(lambda x: x.count()))
+        df_N.rename(columns={0: 'N'}, inplace=True)
+        def num_turnover(col1, col2, pro):  # 定义换手率计算函数
+            set1 = set(self.F1.ix[self.F1[col1] == pro, col1].index)
+            set2 = set(self.F1.ix[self.F1[col2] == pro, col2].index)
+            return len(set1 ^ set2)
+        for col1, col2 in zip(cols[:-1], cols[1:]):  # 对Pro1和pro5每一列（即每一周）计算换手率
+            K = num_turnover(col1, col2, 'pro1')
+            L = num_turnover(col1, col2, 'pro5')
+            turnover.ix['turnover', col2] = (K + L) / ((df_N.loc[col1, 'N'] / 5.0)*2)
+        del cols
+        ma2 = pd.rolling_mean(turnover.T,12)  # 算12-月滑动平均
+        ma2.columns = ['ma2']
+        cum = pd.concat([turnover.T, ma2],axis=1)
+        plt.figure()
+        cum.plot()
+        plt.title(r'Factor Turnover(%)')
+        plt.ylabel('Turnover(%)')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\FactorTurnover.png")
+        plt.close()
+        print "Turn over is done!"
+
+    def IR(self, FACname, ARGname):
+        self.r_ktb.index = self.r_kt.columns
+        self.ER_pb = pd.Series(index=self.labels)  # 定义每个pro的期望series
+        self.UR_pb = pd.Series(index=self.labels)  # 定义每个pro的标准差series
+        self.IR_pb = pd.Series(index=self.labels)  # 定义每个pro的IR series
+        self.r_pb = pd.DataFrame(index=self.FR.columns, columns=self.labels)  # 定义Rp - Rb 存放的dataframe
+        for label in self.labels:
+            for col in self.r_kt.columns:
+                self.r_pb.loc[col, label] = self.r_kt.loc[label, col] - self.r_ktb.loc[col, 'Return']  # r_ktb的列名为‘Return’
+            self.ER_pb[label] = self.r_pb[label].mean()
+            self.UR_pb[label] = self.r_pb[label].std()
+            self.IR_pb[label] = self.ER_pb[label] / self.UR_pb[label]
+        self.ER_ls = self.ser.mean()  # l-s 的期望
+        self.UR_ls = self.ser.std()  # l-s的标准差  【其Rb=0,故可直接用ser（存放r ls,t的series)】
+        self.IR_ls = self.ER_ls / self.UR_ls  # l-s的IR
+        plt.figure()
+        plt.title(r'Information Ratio')
+        plt.ylabel('Information Ratio')
+        dict = {'Quantile1': self.IR_pb['pro1'], 'Quantile2': self.IR_pb['pro2'], 'Quantile3': self.IR_pb['pro3'],
+                'Quantile4': self.IR_pb['pro4'], 'Quantile5': self.IR_pb['pro5'],
+                'L-S strategy': self.IR_ls}
+        for i, key in enumerate(dict):
+            plt.bar(i, dict[key], color='b', width=0.8)
+        plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+        plt.yticks(dict.values())
+        plt.grid(True)
+        plt.savefig("C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\IR.png")
+        plt.close()
+        print "IR is done!"
+
+    def Sum_return(self, FACname, ARGname):
+        coll = self.FR.columns
+        def portret(x, y):                      # 定义一个可以计算portfolio return的函数
+            x[coll[0]] = 1
+            for t in range(0, self.T - 1):
+                t1 = x[coll[t]]
+                t2 = y[coll[t]]+1
+                x[coll[t + 1]] = t1*t2
+            return x.T
+
+        # Prin 为存放收益的dataframe
+        self.Prin = pd.DataFrame(index=['pro1', 'pro2', 'pro3', 'pro4', 'pro5', 'L-S'], columns=self.FR.columns)
+        self.Prin = portret(self.Prin, self.r_kt)
+        self.Prin.to_csv(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\PortfolioReturn.csv")
+
+        # 算quantile return 收益（即题目的要求）
+        self.Prin = self.Prin.iloc[:-1, :]  # 算出(period=5,monthly, period=10,2-month, period=20,4-month,period=60,yearly)
+        self.Print = self.Prin.iloc[3::4, :]
+        del self.Print['L-S']
+        plt.figure()
+        self.Print.plot()
+        plt.title(r'Quantile Returns')
+        plt.ylabel('Cumulative Return')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\QuantileReturn.png")
+        plt.close()
+        # 算 excess return
+        self.r_pb = self.r_pb.T  # 和第6题类似，其作用等于第六题中的r_kt
+        # Prinpb为存放相对市场指数收益的dataframe
+        self.Prinpb = pd.DataFrame(index=['pro1', 'pro2', 'pro3', 'pro4', 'pro5'], columns=self.FR.columns)
+        self.Prinpb = portret(self.Prinpb, self.r_pb)
+        self.Prinpb.to_csv(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\ExcessReturn.csv")
+        # 算 excess return的收益
+        self.Prinpb = self.Prinpb.iloc[:-1, :]  # 算出Monthly cumulatvie return，经过数学公式计算发现这个其实就
+        self.Printpb = self.Prinpb.iloc[3::4, :]  # 等于Portfolio return中每隔四周的值
+        self.Printpb.plot()
+        plt.title(r'Excess Returns')
+        plt.ylabel('Cumulative Return')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\ExcessReturn.png")
+        plt.close()
+        print "various returns are done!"
+
+    def SC(self, FACname, ARGname):
+        Fs = (self.F).copy()  # 将Factor表转置并复制一份， 【465rows, 2557columns】
+        F3 = Fs.iloc[:, :-1]  # 从第一行取到倒数第二行  此时为转置表     【2557rows, 465columns】
+        F4 = Fs.iloc[:, 1:]  # 从第二行取到最后一行   此时为转置表     【2557rows, 465columns】
+        F3.columns = F4.columns  # 将二者列名变为同样，方便后续corrwith
+        correlc = F3.corrwith(F4)  # 即可完成F原表中每一列与下一列间的因子分析
+        F5=F3.iloc[:,1]
+        F5.mean()
+        ma3 = pd.rolling_mean(correlc,12)  # 求12-月 滑动平均
+        correl1t = pd.DataFrame([correlc, ma3])
+        (correl1t.T).plot()
+        plt.title(r'Serial Correlation(%)')
+        plt.ylabel('Serial Corr(%)')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\SerialCorrelation.png")
+        plt.close()
+        print "Correlation is done!"
+
+    def func_SR(self,FACname, ARGname):
+        DR = pd.Series(index=self.labels)  # 构造存DR的series
+        SR = pd.Series(index=self.labels)  # 构造存SR的series
+        r_pb1 = self.r_pb.copy()  # 将r_pb（即Rp-Rb)复制一份
+        r_pb1[self.r_pb >= 0] = 0  # 将所有大于0的值都赋为0
+        def likevar(ser):
+            b = (ser ** 2).sum() / len(ser)
+            return b ** 0.5
+        DR = r_pb1.apply(likevar, axis=1)  # 即实现了DR计算公式
+        self.ER_pb[DR==0]=0
+        DR[DR==0]=1
+        SR = self.ER_pb / DR  # 算出SR
+        ser1 = self.ser.copy()  # 将r ls,t copy一份（ls的r_pb就是r ls,t)
+        ser1[self.ser >= 0] = 0
+        DR_ls = likevar(ser1)
+        if DR_ls ==0:
+            SR_ls = 0
+        else:
+            SR_ls = self.ER_ls / DR_ls
+        plt.title(r'Sortino Ratio')
+        plt.ylabel('Sortino Ratio')
+        dict = {'Quantile1': SR['pro1'], 'Quantile2': SR['pro2'], 'Quantile3': SR['pro3'], 'Quantile4': SR['pro4'],
+                'Quantile5': SR['pro5'],
+                'L-S strategy': SR_ls}
+        for i, key in enumerate(dict):
+            plt.bar(i, dict[key], color='b', width=0.8)
+        plt.xticks(np.arange(len(dict)) + 0.1, dict.keys())
+        plt.yticks(dict.values())
+        plt.grid(True)
+        plt.savefig("C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\SR.png")
+        plt.close()
+        print "SR is done!"
+
+    def SR_IC(self, FACname, ARGname):
+        Frank = self.F.rank(ascending=False, method='average')  # F的rank 降序
+        FRrank = self.FR.rank(ascending=False, method='average')  # FR的rank 降序
+        correls = Frank.corrwith(FRrank)  # 算二者排名的相关性
+        correlst = correls.copy()  # 将其换成时间序列
+        correlst.index = pd.DatetimeIndex(correls.index).date
+        ma4 = pd.rolling_mean(correlst, 12)  # 算12-月滑动平均
+        correl2t = pd.DataFrame([correlst, ma4])
+        (correl2t.T).plot()
+        plt.title(r'Spearman IC(%)')
+        plt.ylabel('Spearman IC(%)')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\Spearman_IC.png")
+        plt.close()
+        print "Spearson IC is done!"
+
+    def rlst(self, FACname, ARGname):
+        sert = self.ser.copy()  # 将r ls,t的series ‘ser’换为时间序列
+        ma5 = pd.rolling_mean(sert, 12)  # 算12-月 滑动平均
+        ser1t = pd.DataFrame([sert, ma5])
+        (ser1t.T).plot()
+        plt.title(r'Time Series Spread(%)')
+        plt.ylabel('Spread%)')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\Timeseries_Spread.png")
+        plt.close()
+        print "r_ls timeseries is done!"
+
+    def wc_fig(self, FACname, ARGname):
+        plt.figure()  # 新建一个figure（否则会报错）
+        wc = self.Prin['L-S']  # wealth curve就是前面cumulative return表中的L-S列
+        print wc
+        wc.plot()
+        plt.title(r'Wealth Curve')
+        plt.ylabel('L-S Return')
+        plt.savefig(
+            "C:\\DELL\\quantitative research\\Firtest\\Firfactor\\" + FACname + "\\" + ARGname + "\\Wealth_Curve.png")
+        plt.close()
+        print "Wealth Curve is done!"
+
+    def cal_all(self, FACname, ARGname):
+        self.initialize()
+        self.annual_return(FACname, ARGname)
+        self.r_annual_std(FACname, ARGname)
+        self.Ntbar(FACname, ARGname)
+        self.turnover_fig(FACname, ARGname)
+        self.IR(FACname, ARGname)
+        self.Sum_return(FACname, ARGname)
+        self.SC(FACname, ARGname)
+        self.SR_IC(FACname, ARGname)
+        self.func_SR(FACname, ARGname)
+        self.rlst(FACname, ARGname)
+        self.wc_fig(FACname, ARGname)
+        print "Full calculation is done!"
+
+
+f1 = pd.read_csv("C:\DELL\quantitative research\Firtest\secondfactor\AR_5.csv",sep=',',index_col=0)
+#f1 = pd.read_csv("C:\DELL\quantitative research\BacktestLite\FACTOR.csv", sep=',', index_col=0)
+f1 = f1.T
+f2 = pd.read_csv("C:\DELL\quantitative research\Firtest\developdata\FR_5.csv",sep=',',index_col=0)
+#f2 = pd.read_csv("C:\DELL\quantitative research\BacktestLite\FMRTN1W.csv", sep=',', index_col=0)
+f2 = f2.T
+f3 = pd.read_csv("C:\DELL\quantitative research\Firtest\developdata\HS_5.csv",sep=',',index_col=0)
+#f3 = pd.read_csv("C:\DELL\quantitative research\BacktestLite\csy_update\eenchmark.csv",sep=',',index_col=0)
+AR_10 = backtest(f1,f2,f3,1)
+#AR_10.initialize()
+#AR_10.annual_return('PVI','P5')
+AR_10.cal_all('AR','P5')
+print AR_10.r_kt
